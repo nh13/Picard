@@ -23,6 +23,9 @@
  */
 package picard.sam;
 
+import htsjdk.samtools.AbstractBAMFileIndex;
+import htsjdk.samtools.BAMIndexMetaData;
+import htsjdk.samtools.DownsamplingIterator;
 import htsjdk.samtools.DownsamplingIteratorFactory;
 import htsjdk.samtools.DownsamplingIteratorFactory.Strategy;
 import htsjdk.samtools.SAMFileWriter;
@@ -30,7 +33,6 @@ import htsjdk.samtools.SAMFileWriterFactory;
 import htsjdk.samtools.SAMRecord;
 import htsjdk.samtools.SamReader;
 import htsjdk.samtools.SamReaderFactory;
-import htsjdk.samtools.DownsamplingIterator;
 import htsjdk.samtools.util.CloserUtil;
 import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.Log;
@@ -44,7 +46,7 @@ import picard.cmdline.programgroups.SamOrBam;
 import java.io.File;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
-import java.util.Random;
+import java.util.stream.StreamSupport;
 
 /**
  * Class to randomly downsample a BAM file while respecting that we should either retain or discard
@@ -100,6 +102,9 @@ public class DownsampleSam extends CommandLineProgram {
             "Higher accuracy will generally require more memory.")
     public double ACCURACY = 0.0001;
 
+    @Option(shortName = "N", doc = "Keep this many individual reads.", mutex = "PROBABILITY")
+    public long NUM_READS = -1;
+
     private final Log log = Log.getInstance(DownsampleSam.class);
 
     public static void main(final String[] args) {
@@ -111,16 +116,42 @@ public class DownsampleSam extends CommandLineProgram {
         IOUtil.assertFileIsReadable(INPUT);
         IOUtil.assertFileIsWritable(OUTPUT);
 
+        if (0 < NUM_READS) {
+            // NB: may count secondary or supplementary records, so it may be an overestimate of the number of records to be kept later.
+            long numRecords = 0;
+            final SamReader in = SamReaderFactory.makeDefault().referenceSequence(REFERENCE_SEQUENCE).open(INPUT);
+            if (in.hasIndex()) {
+                final AbstractBAMFileIndex index = (AbstractBAMFileIndex) in.indexing().getIndex();
+                final int nRefs = index.getNumberOfReferences();
+                for (int i = 0; i < nRefs; i++) {
+                    final BAMIndexMetaData indexMetaData = index.getMetaData(i);
+                    numRecords += indexMetaData.getAlignedRecordCount() + indexMetaData.getUnalignedRecordCount();
+                }
+                numRecords += index.getNoCoordinateCount();
+            }
+            else {
+                final Iterable<SAMRecord> iterable = in::iterator;
+                numRecords = StreamSupport.stream(iterable.spliterator(), false).filter(record -> !record.isSecondaryOrSupplementary()).count();
+            }
+            if (NUM_READS > numRecords) {
+                log.warn("Running DownsampleSam with NUM_READS greater than the number of reads in the input file.  Defaulting to 1.0.");
+                PROBABILITY = 1.0;
+            }
+            else {
+                PROBABILITY = NUM_READS / (double) numRecords;
+            }
+        }
+
         // Warn the user if they are running with P=1; 0 <= P <= 1 is checked by the DownsamplingIteratorFactory
         if (PROBABILITY == 1) {
             log.warn("Running DownsampleSam with PROBABILITY=1! This will likely just recreate the input file.");
         }
 
-        final Random r = RANDOM_SEED == null ? new Random() : new Random(RANDOM_SEED);
+        final Integer randomSeed = RANDOM_SEED == null ? 42: RANDOM_SEED;
         final SamReader in = SamReaderFactory.makeDefault().referenceSequence(REFERENCE_SEQUENCE).open(INPUT);
         final SAMFileWriter out = new SAMFileWriterFactory().makeSAMOrBAMWriter(in.getFileHeader(), true, OUTPUT);
         final ProgressLogger progress = new ProgressLogger(log, (int) 1e7, "Wrote");
-        final DownsamplingIterator iterator = DownsamplingIteratorFactory.make(INPUT, STRATEGY, PROBABILITY, ACCURACY, RANDOM_SEED);
+        final DownsamplingIterator iterator = DownsamplingIteratorFactory.make(INPUT, STRATEGY, PROBABILITY, ACCURACY, randomSeed);
 
         while (iterator.hasNext()) {
             final SAMRecord rec = iterator.next();
