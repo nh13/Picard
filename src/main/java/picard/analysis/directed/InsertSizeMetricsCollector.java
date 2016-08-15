@@ -137,55 +137,13 @@ public class InsertSizeMetricsCollector extends MultiLevelCollector<InsertSizeMe
                     metrics.LIBRARY            = this.library;
                     metrics.READ_GROUP         = this.readGroup;
                     metrics.PAIR_ORIENTATION   = pairOrientation;
+
                     if (!histogram.isEmpty()) {
                         metrics.READ_PAIRS = (long) total;
-                        metrics.MAX_INSERT_SIZE = (int) histogram.getMax();
-                        metrics.MIN_INSERT_SIZE = (int) histogram.getMin();
-                        metrics.MEDIAN_INSERT_SIZE = histogram.getMedian();
-                        metrics.MEDIAN_ABSOLUTE_DEVIATION = histogram.getMedianAbsoluteDeviation();
-
-                        final double median = histogram.getMedian();
-                        double covered = 0;
-                        double low = median;
-                        double high = median;
-
-                        while (low >= histogram.getMin() || high <= histogram.getMax()) {
-                            final Histogram.Bin<Integer> lowBin = histogram.get((int) low);
-                            if (lowBin != null) covered += lowBin.getValue();
-
-                            if (low != high) {
-                                final Histogram.Bin<Integer> highBin = histogram.get((int) high);
-                                if (highBin != null) covered += highBin.getValue();
-                            }
-
-                            final double percentCovered = covered / total;
-                            final int distance = (int) (high - low) + 1;
-                            if (percentCovered >= 0.1 && metrics.WIDTH_OF_10_PERCENT == 0) metrics.WIDTH_OF_10_PERCENT = distance;
-                            if (percentCovered >= 0.2 && metrics.WIDTH_OF_20_PERCENT == 0) metrics.WIDTH_OF_20_PERCENT = distance;
-                            if (percentCovered >= 0.3 && metrics.WIDTH_OF_30_PERCENT == 0) metrics.WIDTH_OF_30_PERCENT = distance;
-                            if (percentCovered >= 0.4 && metrics.WIDTH_OF_40_PERCENT == 0) metrics.WIDTH_OF_40_PERCENT = distance;
-                            if (percentCovered >= 0.5 && metrics.WIDTH_OF_50_PERCENT == 0) metrics.WIDTH_OF_50_PERCENT = distance;
-                            if (percentCovered >= 0.6 && metrics.WIDTH_OF_60_PERCENT == 0) metrics.WIDTH_OF_60_PERCENT = distance;
-                            if (percentCovered >= 0.7 && metrics.WIDTH_OF_70_PERCENT == 0) metrics.WIDTH_OF_70_PERCENT = distance;
-                            if (percentCovered >= 0.8 && metrics.WIDTH_OF_80_PERCENT == 0) metrics.WIDTH_OF_80_PERCENT = distance;
-                            if (percentCovered >= 0.9 && metrics.WIDTH_OF_90_PERCENT == 0) metrics.WIDTH_OF_90_PERCENT = distance;
-                            if (percentCovered >= 0.99 && metrics.WIDTH_OF_99_PERCENT == 0) metrics.WIDTH_OF_99_PERCENT = distance;
-
-                            --low;
-                            ++high;
-                        }
+                        metrics.calculateDerivedFields(histogram, getWidthToTrimTo(metrics));
                     }
 
-                    // Trim the Histogram down to get rid of outliers that would make the chart useless.
-                    final Histogram<Integer> trimmedHistogram = histogram; // alias it
-                    trimmedHistogram.trimByWidth(getWidthToTrimTo(metrics));
-
-                    if (!trimmedHistogram.isEmpty()) {
-                        metrics.MEAN_INSERT_SIZE = trimmedHistogram.getMean();
-                        metrics.STANDARD_DEVIATION = trimmedHistogram.getStandardDeviation();
-                    }
-
-                    file.addHistogram(trimmedHistogram);
+                    file.addHistogram(histogram);
                     file.addMetric(metrics);
                 }
             }
@@ -196,7 +154,7 @@ public class InsertSizeMetricsCollector extends MultiLevelCollector<InsertSizeMe
          */
         private int getWidthToTrimTo(InsertSizeMetrics metrics) {
             if (histogramWidth == null) {
-                return (int) (metrics.MEDIAN_INSERT_SIZE + (deviations * metrics.MEDIAN_ABSOLUTE_DEVIATION));
+                return metrics.getWidthToTrimTo(deviations);
             } else {
                 return histogramWidth;
             }
