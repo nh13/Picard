@@ -33,9 +33,15 @@ import java.lang.annotation.Target;
 import java.lang.reflect.Field;
 
 /**
- * An extension of MetricBase that knows how to merge-by-adding fields that are appropriately annotated. It also provides an interface
- * for calculating derived fields (and an annotation that informs that said fields are derived). Finally, it also allows for an annotation
- * that suggests that a field will be used as an ID and thus merging will simply require that these fields are equal.
+ * An extension of MetricBase that knows how to merge-by-adding fields that are appropriately annotated. It also provides:
+ *   1. an interface for calculating derived fields (and an annotation that informs that said fields are derived).
+ *   2. an annotation for fields that require custom merging methods (MergingIsCustom).
+ *   3. an annotation for fields that will not be merged (will be null).
+ *   4. an annotation that suggests that a field will be used as an ID and thus merging will simply require that these fields are equal.
+ *
+ * For custom merging (@MergingIsCustom), it is recommended that you override the {@link #merge(MergeableMetricBase)} method and call
+ * super.merge() to first merge the mergeable fields, then merge your custom fields.  Finally, calculateDerivedFields will not be called,
+ * and is the responsibility of the merger to call this after all fields that are not derived are merged.
  *
  * merge-by-adding is only enabled for the following types: int, Integer, float, Float, double, Double, short, Short, long, Long, byte, Byte.
  * Overflow will be detected (for the short, and byte types) and an exception thrown.
@@ -51,6 +57,14 @@ public class MergeableMetricBase extends MetricBase {
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.FIELD)
     protected @interface MergeByAssertEquals {}
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.FIELD)
+    protected @interface MergingIsCustom {}
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.FIELD)
+    protected @interface NotImplemented {}
 
     @Retention(RetentionPolicy.RUNTIME)
     @Target(ElementType.FIELD)
@@ -115,8 +129,9 @@ public class MergeableMetricBase extends MetricBase {
 
             if (field.getAnnotationsByType(MergeByAdding.class).length +
                     field.getAnnotationsByType(MergeByAssertEquals.class).length +
-                    field.getAnnotationsByType(NoMergingIsDerived.class).length == 0) {
-                throw new IllegalStateException("All fields of this class must be annotated with @MergeByAdding, @NoMergingIsDerived, or @MergeByAssertEquals. " +
+                    field.getAnnotationsByType(NoMergingIsDerived.class).length +
+                    field.getAnnotationsByType(MergingIsCustom.class).length == 0) {
+                throw new IllegalStateException("All fields of this class must be annotated with @MergeByAdding, @NoMergingIsDerived, @NoMergingIsCustom, or @MergeByAssertEquals. " +
                         "Field " + field.getName() + " isn't annotated.");
             }
 
@@ -185,5 +200,5 @@ public class MergeableMetricBase extends MetricBase {
      * placeholder method that will calculate the derived fields from the other ones. classes that are derived from non-trivial base classes
      * should consider calling super.calculateDerivedFields() as well.
      */
-     public void calculateDerivedFields(){}
+     public void calculateDerivedFields() {}
 }

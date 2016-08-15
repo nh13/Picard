@@ -24,6 +24,8 @@
 
 package picard.analysis;
 
+import htsjdk.samtools.util.Histogram;
+import picard.analysis.replicates.MergeableMetricBase;
 import picard.metrics.MultilevelMetrics;
 
 /**
@@ -40,18 +42,22 @@ public class AlignmentSummaryMetrics extends MultilevelMetrics {
      * in a paired run or PAIR when the metrics are aggregated for both first and second reads
      * in a pair.
      */
+    @MergeByAssertEquals
     public Category CATEGORY;
 
     /**
      * The total number of reads including all PF and non-PF reads. When CATEGORY equals PAIR
      * this value will be 2x the number of clusters.
      */
+    @MergeByAdding
     public long TOTAL_READS;
 
     /** The number of PF reads where PF is defined as passing Illumina's filter. */
+    @MergeByAdding
     public long PF_READS;
 
     /** The percentage of reads that are PF (PF_READS / TOTAL_READS) */
+    @NoMergingIsDerived
     public double PCT_PF_READS;
 
     /**
@@ -59,22 +65,26 @@ public class AlignmentSummaryMetrics extends MultilevelMetrics {
      * entirely of A bases and/or N bases. These reads are marked as they are usually artifactual and
      * are of no use in downstream analysis.
      */
+    @MergeByAdding
     public long PF_NOISE_READS;
 
     /**
      * The number of PF reads that were aligned to the reference sequence. This includes reads that
      * aligned with low quality (i.e. their alignments are ambiguous).
      */
+    @MergeByAdding
     public long PF_READS_ALIGNED;
 
     /**
      * The percentage of PF reads that aligned to the reference sequence. PF_READS_ALIGNED / PF_READS
      */
+    @NoMergingIsDerived
     public double PCT_PF_READS_ALIGNED;
     
     /**
      * The total number of aligned bases, in all mapped PF reads, that are aligned to the reference sequence.
      */
+    @MergeByAdding
     public long PF_ALIGNED_BASES;
 
     /**
@@ -82,6 +92,7 @@ public class AlignmentSummaryMetrics extends MultilevelMetrics {
      * Q20 or higher signifying that the aligner estimates a 1/100 (or smaller) chance that the
      * alignment is wrong.
      */
+    @MergeByAdding
     public long PF_HQ_ALIGNED_READS;
 
     /**
@@ -89,33 +100,39 @@ public class AlignmentSummaryMetrics extends MultilevelMetrics {
      * quality.  Will usually approximate PF_HQ_ALIGNED_READS * READ_LENGTH but may differ when
      * either mixed read lengths are present or many reads are aligned with gaps.
      */
+    @MergeByAdding
     public long PF_HQ_ALIGNED_BASES;
 
     /**
      * The subset of PF_HQ_ALIGNED_BASES where the base call quality was Q20 or higher.
      */
+    @MergeByAdding
     public long PF_HQ_ALIGNED_Q20_BASES;
 
     /**
      * The median number of mismatches versus the reference sequence in reads that were aligned
      * to the reference at high quality (i.e. PF_HQ_ALIGNED READS).
      */
+    @NotImplemented
     public double PF_HQ_MEDIAN_MISMATCHES;
 
     /**
      * The rate of bases mismatching the reference for all bases aligned to the reference sequence.
      */
+    @MergingIsCustom
     public double PF_MISMATCH_RATE;
 
     /**
      * The percentage of bases that mismatch the reference in PF HQ aligned reads.
      */
+    @MergingIsCustom
     public double PF_HQ_ERROR_RATE;
 
     /**
      * The number of insertion and deletion events per 100 aligned bases.  Uses the number of events
      * as the numerator, not the number of inserted or deleted bases.
      */
+    @MergingIsCustom
     public double PF_INDEL_RATE;
 
     /**
@@ -123,40 +140,104 @@ public class AlignmentSummaryMetrics extends MultilevelMetrics {
      * equal length reads this number is just the read length.  When looking at data for merged lanes with
      * differing read lengths this is the mean read length of all reads.
      */
+    @MergingIsCustom
     public double MEAN_READ_LENGTH;
 
     /**
      * The number of aligned reads whose mate pair was also aligned to the reference.
      */
+    @MergeByAdding
     public long READS_ALIGNED_IN_PAIRS;
 
     /**
      * The percentage of reads whose mate pair was also aligned to the reference.
      * READS_ALIGNED_IN_PAIRS / PF_READS_ALIGNED
      */
+    @NoMergingIsDerived
     public double PCT_READS_ALIGNED_IN_PAIRS;
 
     /**
      * The number of instrument cycles in which 80% or more of base calls were no-calls.
      */
+    @NotImplemented
     public long BAD_CYCLES;
 
     /**
      * The number of PF reads aligned to the positive strand of the genome divided by the number of
      * PF reads aligned to the genome.
      */
+    @MergingIsCustom
     public double STRAND_BALANCE;
+
+
+    /**
+     * The number of reads that map outside of a maximum insert size (usually 100kb) or that have
+     * the two ends mapping to different chromosomes.
+     */
+    @MergeByAdding
+    public long NUM_CHIMERAS;
 
     /**
      * The percentage of reads that map outside of a maximum insert size (usually 100kb) or that have
      * the two ends mapping to different chromosomes.
      */
+    @MergingIsCustom
     public double PCT_CHIMERAS;
 
     /**
      * The percentage of PF reads that are unaligned and match to a known adapter sequence right from the
      * start of the read.
      */
+    @MergingIsCustom
     public double PCT_ADAPTER;
 
+    /**
+     * Calculates the following metrics each using a weighted average:
+     * - PCT_ADAPTER
+     * - STRAND_BALANCE
+     * - PF_INDEL_RATE
+     * - PCT_CHIMERAS
+     * - PF_MISMATCH_RATE (assumes non-bisulfite)
+     * - PF_HQ_ERROR_RATE (assumes non-bisulfite)
+     */
+    @Override
+    public void merge(final MergeableMetricBase other) {
+        final AlignmentSummaryMetrics metrics = (AlignmentSummaryMetrics)other;
+
+        // Merge all mergeable fields
+        super.merge(other);
+
+        // Re-calculate various numerators and denominators needed below.
+        final long totalReads = metrics.TOTAL_READS + this.TOTAL_READS;
+        final long pfReads = metrics.PF_READS + this.PF_READS;
+        final long pfReadsAligned = metrics.PF_READS_ALIGNED + this.PF_READS_ALIGNED;
+        final long pfAlignedBases = metrics.PF_ALIGNED_BASES + this.PF_ALIGNED_BASES;
+        final long pfHqAlignedBases = metrics.PF_HQ_ALIGNED_BASES + this.PF_HQ_ALIGNED_BASES;
+        final double chimerasDenom = (metrics.NUM_CHIMERAS / metrics.PCT_CHIMERAS) + (this.NUM_CHIMERAS / this.PCT_CHIMERAS);
+        final double pfMismatchBases = (metrics.PF_MISMATCH_RATE * metrics.PF_ALIGNED_BASES) + (this.PF_MISMATCH_RATE * this.PF_ALIGNED_BASES);
+        final double pfHqMismatchBases = (metrics.PF_HQ_ERROR_RATE * metrics.PF_HQ_ALIGNED_BASES) + (this.PF_HQ_ERROR_RATE * this.PF_HQ_ALIGNED_BASES);
+
+        // Calculate these metrics.
+        if (0 < totalReads)       MEAN_READ_LENGTH = ((metrics.MEAN_READ_LENGTH * metrics.TOTAL_READS) + (this.MEAN_READ_LENGTH + this.TOTAL_READS)) / (double) totalReads;
+        if (0 < pfReadsAligned)   STRAND_BALANCE   = ((metrics.STRAND_BALANCE * metrics.PF_READS_ALIGNED) + (this.STRAND_BALANCE * this.PF_READS_ALIGNED)) / (double) pfReadsAligned;
+        if (0 < pfAlignedBases)   PF_INDEL_RATE    = ((metrics.PF_INDEL_RATE * metrics.PF_ALIGNED_BASES) + (this.PF_INDEL_RATE * this.PF_ALIGNED_BASES)) / (double) pfAlignedBases;
+        if (0 < chimerasDenom)    PCT_CHIMERAS     = (metrics.NUM_CHIMERAS + this.NUM_CHIMERAS) / chimerasDenom;
+        if (0 < pfAlignedBases)   PF_MISMATCH_RATE = pfMismatchBases / (double) pfAlignedBases;
+        if (0 < pfHqAlignedBases) PF_HQ_ERROR_RATE = pfHqMismatchBases / (double) pfHqAlignedBases;
+        if (0 < pfReads)          PCT_ADAPTER      = ((metrics.PCT_ADAPTER * metrics.PF_READS) + (this.PCT_ADAPTER * this.PF_READS)) / (double) pfReads;
+    }
+
+    /**
+     * Calculates:
+     * - PCT_PF_READS
+     * - PCT_PF_READS_ALIGNED
+     * - PCT_READS_ALIGNED_IN_PAIRS
+     */
+    @Override
+    public void calculateDerivedFields() {
+        if (TOTAL_READS > 0)      PCT_PF_READS               = PF_READS / (double) TOTAL_READS;
+
+        if (PF_READS > 0)         PCT_PF_READS_ALIGNED       = (double) PF_READS_ALIGNED / (double) PF_READS;
+        if (PF_READS_ALIGNED > 0) PCT_READS_ALIGNED_IN_PAIRS = (double) READS_ALIGNED_IN_PAIRS / (double) PF_READS_ALIGNED;
+    }
 }

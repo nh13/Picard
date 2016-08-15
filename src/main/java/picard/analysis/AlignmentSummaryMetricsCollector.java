@@ -157,7 +157,6 @@ public class AlignmentSummaryMetricsCollector extends SAMRecordAndReferenceMulti
             private long numPositiveStrand = 0;
             private final Histogram<Integer> readLengthHistogram = new Histogram<Integer>();
             private AlignmentSummaryMetrics metrics;
-            private long chimeras;
             private long chimerasDenominator;
             private long adapterReads;
             private long indels;
@@ -210,7 +209,7 @@ public class AlignmentSummaryMetricsCollector extends SAMRecordAndReferenceMulti
                         if (metrics.PF_READS > 0)         metrics.PCT_PF_READS_ALIGNED = (double) metrics.PF_READS_ALIGNED / (double) metrics.PF_READS;
                         if (metrics.PF_READS_ALIGNED > 0) metrics.PCT_READS_ALIGNED_IN_PAIRS = (double) metrics.READS_ALIGNED_IN_PAIRS/ (double) metrics.PF_READS_ALIGNED;
                         if (metrics.PF_READS_ALIGNED > 0) metrics.STRAND_BALANCE = numPositiveStrand / (double) metrics.PF_READS_ALIGNED;
-                        if (this.chimerasDenominator > 0) metrics.PCT_CHIMERAS = this.chimeras / (double) this.chimerasDenominator;
+                        if (this.chimerasDenominator > 0) metrics.PCT_CHIMERAS = metrics.NUM_CHIMERAS / (double) this.chimerasDenominator;
 
                         if (nonBisulfiteAlignedBases > 0) metrics.PF_MISMATCH_RATE = mismatchHistogram.getSum() / (double) nonBisulfiteAlignedBases;
                         metrics.PF_HQ_MEDIAN_MISMATCHES = hqMismatchHistogram.getMedian();
@@ -253,7 +252,7 @@ public class AlignmentSummaryMetricsCollector extends SAMRecordAndReferenceMulti
 
                                 // With both reads mapped we can see if this pair is chimeric
                                 if (ChimeraUtil.isChimeric(record, maxInsertSize, expectedOrientations)) {
-                                    ++this.chimeras;
+                                    ++this.metrics.NUM_CHIMERAS;
                                 }
                             }
                         }
@@ -261,7 +260,7 @@ public class AlignmentSummaryMetricsCollector extends SAMRecordAndReferenceMulti
                             // Consider chimeras that occur *within* the read using the SA tag
                             if (record.getMappingQuality() >= MAPPING_QUALITY_THRESOLD) {
                                 ++this.chimerasDenominator;
-                                if (record.getAttribute(SAMTag.SA.toString()) != null) ++this.chimeras;
+                                if (record.getAttribute(SAMTag.SA.toString()) != null) ++this.metrics.NUM_CHIMERAS;
                             }
                         }
                     }
