@@ -25,31 +25,27 @@ package picard.vcf;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.metrics.MetricsFile;
-import htsjdk.samtools.util.IOUtil;
-import htsjdk.samtools.util.IntervalList;
-import htsjdk.samtools.util.Log;
-import htsjdk.samtools.util.ProgressLogger;
-import htsjdk.samtools.util.SequenceUtil;
+import htsjdk.samtools.util.*;
 import htsjdk.tribble.Tribble;
-import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.VariantContext;
-import htsjdk.variant.vcf.VCFFileReader;
+import htsjdk.variant.variantcontext.*;
+import htsjdk.variant.variantcontext.writer.Options;
+import htsjdk.variant.variantcontext.writer.VariantContextWriter;
+import htsjdk.variant.variantcontext.writer.VariantContextWriterBuilder;
+import htsjdk.variant.vcf.*;
 import picard.PicardException;
 import picard.cmdline.CommandLineProgram;
 import picard.cmdline.CommandLineProgramProperties;
 import picard.cmdline.Option;
 import picard.cmdline.StandardOptionDefinitions;
 import picard.cmdline.programgroups.VcfOrBcf;
-import picard.vcf.GenotypeConcordanceStates.*;
+import picard.vcf.GenotypeConcordanceStates.CallState;
+import picard.vcf.GenotypeConcordanceStates.ContingencyState;
+import picard.vcf.GenotypeConcordanceStates.TruthAndCallStates;
+import picard.vcf.GenotypeConcordanceStates.TruthState;
 import picard.vcf.PairedVariantSubContextIterator.VcfTuple;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 import static htsjdk.variant.variantcontext.VariantContext.Type.*;
 
@@ -109,6 +105,13 @@ public class GenotypeConcordance extends CommandLineProgram {
             "<li>TN - True negatives are correctly called reference sites</li>" +
             "<li>Validated genotypes - are TP sites where the exact genotype (HET or HOM-VAR) has been validated </li> "     +
             "</ul>"+
+            "" +
+            "<h4>VCF Output:</h4>" +
+            "<ul>" +
+            "<li>The concordance state will be stored in the \"ST\" tag in the INFO field.</li>" +
+            "<li>If the truth and call sample names match, the call will have the \"_CALL\" suffix and the truth will have the " +
+            "\"_TRUTH\" suffix in the output file..</li>" +
+            "</ul>" +
             "<hr />"
             ;
     @Option(shortName = "TV", doc="The VCF containing the truth sample")
@@ -118,8 +121,11 @@ public class GenotypeConcordance extends CommandLineProgram {
     public File CALL_VCF;
 
     @Option(shortName = StandardOptionDefinitions.OUTPUT_SHORT_NAME, doc = "Basename for the two metrics files that are to be written." +
-            " Resulting files will be <OUTPUT>" + SUMMARY_METRICS_FILE_EXTENSION + "  and <OUTPUT>" + DETAILED_METRICS_FILE_EXTENSION + ".")
+            " Resulting files will be <OUTPUT>" + SUMMARY_METRICS_FILE_EXTENSION + " and <OUTPUT>" + DETAILED_METRICS_FILE_EXTENSION + ".")
     public File OUTPUT;
+
+    @Option(doc = "Output VCF annotated with concordance information.", optional = true)
+    public File OUTPUT_VCF = null;
 
     @Option(shortName = "TS", doc="The name of the truth sample within the truth VCF")
     public String TRUTH_SAMPLE;
@@ -163,6 +169,9 @@ public class GenotypeConcordance extends CommandLineProgram {
     protected GenotypeConcordanceCounts indelCounter;
     public GenotypeConcordanceCounts getIndelCounter() { return indelCounter; }
 
+    public static final String ContingencyStateTag = "ST";
+    public static final VCFHeaderLine ContingencyStateHeaderLine = new VCFInfoHeaderLine(ContingencyStateTag, VCFHeaderLineCount.UNBOUNDED, VCFHeaderLineType.String, "The genotype concordance contingency state(s)");
+
     // TODO: add optimization if the samples are in the same file
     // TODO: add option for auto-detect pairs based on same sample name
     // TODO: allow multiple sample-pairs in one pass
@@ -197,6 +206,7 @@ public class GenotypeConcordance extends CommandLineProgram {
                         "sites are considered confident homozygous reference calls.");
             }
         }
+        if (OUTPUT_VCF != null) IOUtil.assertFileIsWritable(OUTPUT_VCF);
 
         if (errors.isEmpty()) {
             return null;
@@ -222,6 +232,9 @@ public class GenotypeConcordance extends CommandLineProgram {
         IOUtil.assertFileIsWritable(summaryMetricsFile);
         IOUtil.assertFileIsWritable(detailedMetricsFile);
         IOUtil.assertFileIsWritable(contingencyMetricsFile);
+
+        final GenotypeConcordanceSchemeFactory schemeFactory = new GenotypeConcordanceSchemeFactory();
+        final GenotypeConcordanceScheme scheme = schemeFactory.getScheme(MISSING_SITES_HOM_REF);
 
         final boolean usingIntervals = this.INTERVALS != null && !this.INTERVALS.isEmpty();
         IntervalList intervals = null;
@@ -259,6 +272,30 @@ public class GenotypeConcordance extends CommandLineProgram {
 
         // Verify that both VCFs have the same Sequence Dictionary
         SequenceUtil.assertSequenceDictionariesEqual(truthReader.getFileHeader().getSequenceDictionary(), callReader.getFileHeader().getSequenceDictionary());
+
+        VariantContextWriter writer = null;
+        String outputCallSampleName = CALL_SAMPLE, outputTruthSampleName = TRUTH_SAMPLE;
+        if (OUTPUT_VCF != null) {
+            final VariantContextWriterBuilder builder = new VariantContextWriterBuilder()
+                    .setOutputFile(OUTPUT_VCF)
+                    .setReferenceDictionary(callReader.getFileHeader().getSequenceDictionary())
+                    .setOption(Options.ALLOW_MISSING_FIELDS_IN_HEADER)
+                    .setOption(Options.INDEX_ON_THE_FLY);
+            writer = builder.build();
+
+            if (CALL_SAMPLE.equals(TRUTH_SAMPLE)) {
+                outputCallSampleName  = CALL_SAMPLE + "_CALL";
+                outputTruthSampleName = TRUTH_SAMPLE + "_TRUTH";
+            }
+
+            // create the output header
+            final List<String> sampleNames = Arrays.asList(outputCallSampleName, outputTruthSampleName);
+            final Set<VCFHeaderLine> headerLines = new HashSet<>();
+            headerLines.addAll(callReader.getFileHeader().getMetaDataInInputOrder());
+            headerLines.addAll(truthReader.getFileHeader().getMetaDataInInputOrder());
+            headerLines.add(ContingencyStateHeaderLine);
+            writer.writeHeader(new VCFHeader(headerLines, sampleNames));
+        }
 
         if (usingIntervals) {
             // If using intervals, verify that the sequence dictionaries agree with those of the VCFs
@@ -301,6 +338,49 @@ public class GenotypeConcordance extends CommandLineProgram {
                 unClassifiedStatesMap.put(condition, count);
             }
 
+            // write out an annotated VCF
+            if (writer != null) {
+                final Set<Allele> alleles = new HashSet<>();
+                final List<Genotype> genotypes = new ArrayList<>(2);
+                VariantContextBuilder builder = null;
+                final VariantContext truthContext, callContext;
+
+                // get the alleles and genotypes
+                if (tuple.leftVariantContext.isPresent()) {
+                    truthContext = tuple.leftVariantContext.get();
+                    alleles.addAll(truthContext.getAlleles());
+                    final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(truthContext.getGenotype(TRUTH_SAMPLE));
+                    genotypeBuilder.name(outputTruthSampleName);
+                    genotypes.add(genotypeBuilder.make());
+                    builder = new VariantContextBuilder(truthContext.getSource(), truthContext.getContig(), truthContext.getStart(), truthContext.getEnd(), Collections.emptyList());
+                }
+                else {
+                    truthContext = null;
+                }
+                if (tuple.rightVariantContext.isPresent()) {
+                    callContext = tuple.rightVariantContext.get();
+                    alleles.addAll(callContext.getAlleles());
+                    final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(callContext.getGenotype(CALL_SAMPLE));
+                    genotypeBuilder.name(outputCallSampleName);
+                    genotypes.add(genotypeBuilder.make());
+                    if (builder == null) builder = new VariantContextBuilder(callContext.getSource(), callContext.getContig(), callContext.getStart(), callContext.getEnd(), Collections.emptyList());
+                }
+                else {
+                    callContext = null;
+                }
+
+                // set the alleles and genotypes
+                builder.alleles(alleles).genotypes(genotypes);
+
+                // set the concordance state attribute
+                final TruthAndCallStates state = GenotypeConcordance.determineState(truthContext, TRUTH_SAMPLE, callContext, CALL_SAMPLE, MIN_GQ, MIN_DP);
+                final ContingencyState[] stateArray = scheme.getConcordanceStateArray(state.truthState, state.callState);
+                builder.attribute(ContingencyStateTag, Arrays.asList(stateArray));
+
+                // write it
+                writer.add(builder.make());
+            }
+
             //final VariantContext variantContextForLogging = tuple.leftVariantContext.orElseGet(tuple.rightVariantContext::get); // FIXME
             final VariantContext variantContextForLogging = tuple.leftVariantContext.isPresent() ? tuple.leftVariantContext.get() : tuple.rightVariantContext.get();
             progress.record(variantContextForLogging.getContig(), variantContextForLogging.getStart());
@@ -340,6 +420,10 @@ public class GenotypeConcordance extends CommandLineProgram {
         for (final String condition : unClassifiedStatesMap.keySet()) {
             log.info("Uncovered truth/call Variant Context Type Counts: " + condition + " " + unClassifiedStatesMap.get(condition));
         }
+
+        CloserUtil.close(callReader);
+        CloserUtil.close(truthReader);
+        if (writer != null) writer.close();
 
         return 0;
     }
