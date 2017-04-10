@@ -251,38 +251,4 @@ public class MarkIlluminaAdapters extends CommandLineProgram {
         CloserUtil.close(in);
         return 0;
     }
-
-    private final class CustomAdapterPair implements AdapterPair {
-
-        final String fivePrime, threePrime, fivePrimeReadOrder;
-        final byte[] fivePrimeBytes, threePrimeBytes, fivePrimeReadOrderBytes;
-
-        private CustomAdapterPair(final String fivePrime, final String threePrime) {
-            this.threePrime = threePrime;
-            this.threePrimeBytes = StringUtil.stringToBytes(threePrime);
-
-            this.fivePrime = fivePrime;
-            this.fivePrimeReadOrder = SequenceUtil.reverseComplement(fivePrime);
-            this.fivePrimeBytes = StringUtil.stringToBytes(fivePrime);
-            this.fivePrimeReadOrderBytes = StringUtil.stringToBytes(fivePrimeReadOrder);
-        }
-
-        public String get3PrimeAdapter() { return threePrime; }
-
-        public String get5PrimeAdapter() { return fivePrime; }
-
-        public String get3PrimeAdapterInReadOrder() { return threePrime; }
-
-        public String get5PrimeAdapterInReadOrder() { return fivePrimeReadOrder; }
-
-        public byte[] get3PrimeAdapterBytes() { return threePrimeBytes; }
-
-        public byte[] get5PrimeAdapterBytes() { return fivePrimeBytes; }
-
-        public byte[] get3PrimeAdapterBytesInReadOrder() { return threePrimeBytes; }
-
-        public byte[] get5PrimeAdapterBytesInReadOrder() { return fivePrimeReadOrderBytes; }
-
-        public String getName() { return "Custom adapter pair"; }
-    }
 }
