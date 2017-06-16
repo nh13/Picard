@@ -25,10 +25,12 @@ package picard.sam;
 
 import htsjdk.samtools.*;
 import htsjdk.samtools.DownsamplingIteratorFactory.Strategy;
+import htsjdk.samtools.reference.ReferenceSequence;
 import htsjdk.samtools.util.CloserUtil;
 import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.Log;
 import htsjdk.samtools.util.ProgressLogger;
+import picard.analysis.CollectQualityYieldMetrics;
 import picard.cmdline.CommandLineProgram;
 import picard.cmdline.CommandLineProgramProperties;
 import picard.cmdline.Option;
@@ -94,10 +96,26 @@ public class DownsampleSam extends CommandLineProgram {
             "Higher accuracy will generally require more memory.")
     public double ACCURACY = 0.0001;
 
+    @Option(shortName = "M", doc = "The file to write metrics to (QualityYieldMetrics)")
+    public File METRICS_FILE;
+
     private final Log log = Log.getInstance(DownsampleSam.class);
 
     public static void main(final String[] args) {
         new DownsampleSam().instanceMainWithExit(args);
+    }
+
+    /** Expose the various methods needed to collect QualityYieldMetrics. */
+    private class PublicCollectQualityYieldMetrics extends CollectQualityYieldMetrics {
+        public PublicCollectQualityYieldMetrics() {
+            super();
+            this.OUTPUT = METRICS_FILE;
+        }
+
+        @Override
+        public void acceptRead(final SAMRecord rec, final ReferenceSequence ref) { super.acceptRead(rec, ref); }
+        @Override
+        protected void finish() { super.finish(); }
     }
 
     @Override
@@ -115,10 +133,12 @@ public class DownsampleSam extends CommandLineProgram {
         final SAMFileWriter out = new SAMFileWriterFactory().makeSAMOrBAMWriter(in.getFileHeader(), true, OUTPUT);
         final ProgressLogger progress = new ProgressLogger(log, (int) 1e7, "Wrote");
         final DownsamplingIterator iterator = DownsamplingIteratorFactory.make(in, STRATEGY, PROBABILITY, ACCURACY, RANDOM_SEED);
+        final PublicCollectQualityYieldMetrics metricsCollector = new PublicCollectQualityYieldMetrics();
 
         while (iterator.hasNext()) {
             final SAMRecord rec = iterator.next();
             out.addAlignment(rec);
+            metricsCollector.acceptRead(rec, null);
             progress.record(rec);
         }
 
@@ -127,6 +147,8 @@ public class DownsampleSam extends CommandLineProgram {
         final NumberFormat fmt = new DecimalFormat("0.00%");
         log.info("Finished downsampling.");
         log.info("Kept ", iterator.getAcceptedCount(), " out of ", iterator.getSeenCount(), " reads (", fmt.format(iterator.getAcceptedFraction()), ").");
+
+        if (METRICS_FILE != null) metricsCollector.finish();
 
         return 0;
     }
